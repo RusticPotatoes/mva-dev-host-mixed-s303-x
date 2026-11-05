@@ -1,0 +1,7 @@
+{
+  "web": "running",
+  "backup": "running",
+  "metrics": "running",
+  "ntp": "running",
+  "printer": "disabled"
+}

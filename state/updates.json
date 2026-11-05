@@ -1,0 +1,15 @@
+[
+  {
+    "pkg": "openssl",
+    "from": "3.0.13",
+    "to": "3.0.15",
+    "security": true
+  },
+  {
+    "pkg": "kernel",
+    "from": "6.8.2",
+    "to": "7.1.0",
+    "security": false,
+    "reboot": true
+  }
+]

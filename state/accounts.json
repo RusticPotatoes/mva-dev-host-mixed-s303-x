@@ -1,0 +1,12 @@
+[
+  {
+    "user": "jdoe",
+    "locked": false,
+    "failed_logins": 0
+  },
+  {
+    "user": "backup",
+    "locked": false,
+    "failed_logins": 0
+  }
+]

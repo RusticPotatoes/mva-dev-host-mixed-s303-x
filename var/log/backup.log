@@ -1,0 +1,2 @@
+Nov 03 02:00 backup: wrote 1.2 GB to /srv/backup
+Nov 04 02:00 backup: WARNING low free space on /: 95% used; snapshots in var/backups

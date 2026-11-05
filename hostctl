@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""hostctl: the admin interface of this host. Usage:
+  hostctl status            services and their state
+  hostctl check             health checks (exit 1 if any FAIL)
+  hostctl logs SERVICE      a service's recent log
+  hostctl restart SERVICE   restart a service
+  hostctl updates           pending package updates
+  hostctl update PACKAGE    apply one pending update
+  hostctl accounts          user accounts
+All state is in this directory: etc/ (configuration), state/, var/log/."""
+import json, sys
+from pathlib import Path
+ROOT = Path(__file__).resolve().parent
+
+def conf(name):
+    out = {}
+    for line in (ROOT / "etc" / name).read_text().splitlines():
+        line = line.split("#", 1)[0].strip()
+        if "=" in line:
+            k, v = line.split("=", 1); out[k.strip()] = v.strip()
+    return out
+
+def js(rel): return json.loads((ROOT / rel).read_text())
+def save(rel, data): (ROOT / rel).write_text(json.dumps(data, indent=2) + "\n")
+
+def metrics_state():
+    s = js("state/services.json")["metrics"]
+    if s == "running" and int(conf("metrics.conf").get("max_open_files", "0")) < 1024:
+        return "crashed"
+    return s
+
+def services():
+    out = {}
+    out["web"] = "running"
+    mounts = js("state/mounts.json")
+    out["backup"] = "running" if conf("backup.conf").get("target") in mounts else "failing"
+    out["metrics"] = metrics_state()
+    out["ntp"] = "running" if conf("ntp.conf").get("server") in js("etc/ntp.allowed.json") else "failing"
+    out["printer"] = "disabled (by owner)"
+    return out
+
+def disk_pct():
+    base = js("state/disk.json")["used_pct"]
+    rot = conf("logrotate.conf")
+    return base if rot.get("enabled") == "true" and int(rot.get("keep", "0")) <= 14 else base + 19
+
+def checks():
+    out = []
+    for name, st in services().items():
+        if st.startswith("disabled"):
+            out.append(("WARN", name, st)); continue
+        out.append(("OK" if st == "running" else "FAIL", name, st))
+    d = disk_pct()
+    out.append(("OK" if d < 90 else "FAIL", "disk", f"{d}% used"))
+    sec = [u["pkg"] for u in js("state/updates.json") if u.get("security")]
+    out.append(("FAIL" if sec else "OK", "security-updates", ", ".join(sec) + " pending" if sec else "none pending"))
+    locked = [a["user"] for a in js("state/accounts.json") if a.get("locked")]
+    out.append(("FAIL" if locked else "OK", "accounts", ", ".join(f"{u} locked" for u in locked) or "all usable"))
+    if (ROOT / "etc" / "api.key.json").exists():
+        k = js("etc/api.key.json")
+        out.append(("FAIL" if k["expires"] < "2026-11-05" else "OK", "credentials", f"api key expires {k['expires']}"))
+    return out
+
+def main(argv):
+    cmd = argv[0] if argv else "help"
+    if cmd == "status":
+        for k, v in services().items(): print(f"{k:10} {v}")
+        return 0
+    if cmd == "check":
+        res = checks()
+        for lvl, name, why in res: print(f"{lvl:4} {name}: {why}")
+        return 1 if any(l == "FAIL" for l, _, _ in res) else 0
+    if cmd == "logs" and len(argv) == 2:
+        p = ROOT / "var" / "log" / f"{argv[1]}.log"
+        if not p.exists(): print(f"no log for {argv[1]}", file=sys.stderr); return 2
+        print(p.read_text(), end=""); return 0
+    if cmd == "restart" and len(argv) == 2:
+        svc = js("state/services.json")
+        if argv[1] not in svc: print(f"unknown service {argv[1]}", file=sys.stderr); return 2
+        svc[argv[1]] = "running"; save("state/services.json", svc)
+        with open(ROOT / "state" / "restarts.log", "a") as f: f.write(argv[1] + "\n")
+        st = services()[argv[1]]
+        print(f"{argv[1]} restarted: now {st}"); return 0 if st == "running" else 1
+    if cmd == "updates":
+        for u in js("state/updates.json"):
+            print(f"{u['pkg']:10} {u['from']} -> {u['to']}" + ("  security" if u.get("security") else "") + ("  needs reboot" if u.get("reboot") else ""))
+        return 0
+    if cmd == "update" and len(argv) == 2:
+        ups = js("state/updates.json"); hit = [u for u in ups if u["pkg"] == argv[1]]
+        if not hit: print(f"no pending update for {argv[1]}", file=sys.stderr); return 2
+        pk = js("state/packages.json"); pk[argv[1]] = hit[0]["to"]; save("state/packages.json", pk)
+        save("state/updates.json", [u for u in ups if u["pkg"] != argv[1]])
+        print(f"{argv[1]} updated to {hit[0]['to']}" + (" (reboot required to take effect)" if hit[0].get("reboot") else "")); return 0
+    if cmd == "accounts":
+        for a in js("state/accounts.json"):
+            print(f"{a['user']:8} {'LOCKED' if a.get('locked') else 'ok'}  failed_logins={a.get('failed_logins', 0)}")
+        return 0
+    print(__doc__); return 0 if cmd == "help" else 2
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
